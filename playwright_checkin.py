@@ -1,34 +1,43 @@
 """
 Playwright async 方案：共享浏览器 + asyncio.gather，同一线程无竞态
 """
-import os
-import json
-import time
-import sys
+
 import asyncio
-from threading import Lock
+import json
+import os
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 try:
-    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+    from playwright.async_api import TimeoutError as PwTimeout
+    from playwright.async_api import async_playwright
 except ImportError as e:
     print(f"❌ Playwright 导入失败: {e}")
     print("请运行: pip install playwright==1.48.0")
     sys.exit(1)
 
 from urllib.parse import urlparse
+
 import requests
 
 # ─────────────── 配置 ───────────────
-COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ikuuu_cookies.json")
+COOKIE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "ikuuu_cookies.json"
+)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
-RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
+RESULT_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "checkin_result.json"
+)
+
 
 def get_cookie_key(email, base_url):
     host = urlparse(base_url).netloc.lower()
     return f"{email}@@{host}"
+
 
 def _load_cookie_store_unlocked():
     try:
@@ -40,6 +49,7 @@ def _load_cookie_store_unlocked():
         tprint(f"  ⚠️ 加载cookie失败: {e}")
         return {}
 
+
 def _save_cookie_store_unlocked(store):
     try:
         temp_file = COOKIE_FILE + ".tmp"
@@ -48,6 +58,7 @@ def _save_cookie_store_unlocked(store):
         os.replace(temp_file, COOKIE_FILE)
     except Exception as e:
         tprint(f"  ⚠️ 保存cookie失败: {e}")
+
 
 def save_session_cookie(email, base_url, pw_cookies):
     store = _load_cookie_store_unlocked()
@@ -69,6 +80,7 @@ def save_session_cookie(email, base_url, pw_cookies):
     }
     _save_cookie_store_unlocked(store)
 
+
 def load_session_cookie(email, base_url):
     store = _load_cookie_store_unlocked()
     key = get_cookie_key(email, base_url)
@@ -80,6 +92,7 @@ def load_session_cookie(email, base_url):
         return None
     return cookies
 
+
 def clear_session_cookie(email, base_url):
     store = _load_cookie_store_unlocked()
     key = get_cookie_key(email, base_url)
@@ -87,29 +100,31 @@ def clear_session_cookie(email, base_url):
         del store[key]
         _save_cookie_store_unlocked(store)
 
+
 # ─────────────── 邮箱脱敏 ───────────────
 def mask_email(email):
-    idx = email.find('@')
+    idx = email.find("@")
     if idx <= 0:
         return email
-    return email[0] + '***' + email[idx:]
+    return email[0] + "***" + email[idx:]
 
 
 # ─────────────── 账号获取 ───────────────
 def get_accounts():
     accounts = []
-    account_str = os.getenv('ACCOUNTS')
+    account_str = os.getenv("ACCOUNTS")
     if account_str and account_str.strip():
         for line in account_str.strip().splitlines():
             line = line.strip()
-            if line and ':' in line:
-                email, pwd = line.split(':', 1)
+            if line and ":" in line:
+                email, pwd = line.split(":", 1)
                 accounts.append((email.strip(), pwd.strip()))
     else:
         print("❌ 未配置 ACCOUNTS 环境变量")
         return None
     print(f"📋 找到 {len(accounts)} 个账户")
     return accounts
+
 
 # ─────────────── 验证 Cookie ───────────────
 def validate_cookie(session, base_url):
@@ -131,11 +146,12 @@ def validate_cookie(session, base_url):
     except requests.exceptions.RequestException:
         return None
 
+
 # ─────────────── 签到 ───────────────
 def do_checkin(session, base_url):
     try:
         resp = session.post(
-            base_url + '/user/checkin',
+            base_url + "/user/checkin",
             headers={
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -147,21 +163,70 @@ def do_checkin(session, base_url):
         if resp.status_code != 200:
             return False, f"签到失败(状态码{resp.status_code})"
         data = resp.json()
-        if data.get('ret') == 1:
+        if data.get("ret") == 1:
             return True, f"成功 | {data.get('msg', '')}"
-        msg = str(data.get('msg', '未知'))
-        if any(p in msg for p in ['已签到', '已经签到', '已簽到', 'already']):
+        msg = str(data.get("msg", "未知"))
+        if any(p in msg for p in ["已签到", "已经签到", "已簽到", "already"]):
             return True, f"成功 | {msg}"
         return False, f"签到失败: {msg}"
     except Exception as e:
         return False, f"签到异常: {e}"
 
+
 # ─────────────── 线程安全打印 ───────────────
 _print_lock = Lock()
+
 
 def tprint(*args, **kwargs):
     with _print_lock:
         print(*args, **kwargs)
+
+
+# ─────────────── 企业微信通知（同步实现，可在异步中直接调用）───────────────
+def get_wecom_access_token(corpid, corpsecret):
+    """获取企业微信 access_token"""
+    url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corpid}&corpsecret={corpsecret}"
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get("errcode") == 0:
+            return data["access_token"]
+        else:
+            print(f"⚠️ 获取 access_token 失败: {data}")
+            return None
+    except Exception as e:
+        print(f"⚠️ 获取 access_token 异常: {e}")
+        return None
+
+
+def send_wecom_message(content, corpid, corpsecret, agentid):
+    """发送企业微信文本消息（给所有人）"""
+    if not all([corpid, corpsecret, agentid]):
+        print("⚠️ 企业微信配置不完整，跳过发送")
+        return False
+    token = get_wecom_access_token(corpid, corpsecret)
+    if not token:
+        return False
+    url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}"
+    data = {
+        "touser": "@all",
+        "msgtype": "text",
+        "agentid": int(agentid),
+        "text": {"content": content[:2048]},  # 企业微信限制 2048 字节
+    }
+    try:
+        resp = requests.post(url, json=data, timeout=10)
+        result = resp.json()
+        if result.get("errcode") == 0:
+            print("✅ 企业微信通知发送成功")
+            return True
+        else:
+            print(f"⚠️ 企业微信通知发送失败: {result}")
+            return False
+    except Exception as e:
+        print(f"⚠️ 企业微信通知异常: {e}")
+        return False
+
 
 # ─────────────── Playwright 登录（context 级别，async）───────────────
 async def login_in_context_async(context, email, password, base_url, timeout_ms=60000):
@@ -185,23 +250,22 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
         print(f"  ✅ 页面加载完成: {await page.title()}")
 
-        await page.wait_for_selector('#email', timeout=10000)
+        await page.wait_for_selector("#email", timeout=10000)
         print(f"  📝 填写账号密码...")
 
-        await page.fill('#email', email)
-        await page.fill('#password', password)
+        await page.fill("#email", email)
+        await page.fill("#password", password)
 
-        await page.wait_for_selector('.embed-captcha', timeout=10000)
+        await page.wait_for_selector(".embed-captcha", timeout=10000)
 
         try:
-            await page.click('.geetest_btn_click', timeout=5000)
+            await page.click(".geetest_btn_click", timeout=5000)
             print(f"  ✅ 已点击验证按钮")
         except Exception:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
         await page.wait_for_function(
-            "() => window.Captcha && window.Captcha.isReady()",
-            timeout=20000
+            "() => window.Captcha && window.Captcha.isReady()", timeout=20000
         )
 
         login_btn = await page.query_selector('button[type="submit"]')
@@ -220,7 +284,11 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         except PwTimeout:
             current_url = page.url
             content = await page.content()
-            if "/auth/login" not in current_url or "签到" in content or "剩余流量" in content:
+            if (
+                "/auth/login" not in current_url
+                or "签到" in content
+                or "剩余流量" in content
+            ):
                 print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
             else:
                 return None, "登录后未检测到期望的页面跳转"
@@ -258,7 +326,9 @@ async def login_account_async(browser, email, password, domains, timeout_ms=6000
                 Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
             """)
             tprint(f"  [{masked}] 尝试 {domain}")
-            pw_cookies, err = await login_in_context_async(context, email, password, base_url, timeout_ms)
+            pw_cookies, err = await login_in_context_async(
+                context, email, password, base_url, timeout_ms
+            )
             if pw_cookies:
                 return email, pw_cookies, None, domain
             tprint(f"  [{masked}] {domain} 失败: {err}")
@@ -282,7 +352,9 @@ def cookie_checkin(email, password):
         sess.cookies = requests.utils.cookiejar_from_dict(cached)
         status = validate_cookie(sess, base_url)
         if status is None:
-            tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
+            tprint(
+                f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试"
+            )
             return email, None, True, True
         if status is True:
             ok_s, msg = do_checkin(sess, base_url)
@@ -329,7 +401,9 @@ async def async_main():
     task_to_idx = {}
     executor = ThreadPoolExecutor(max_workers=20)
     for idx, (email, pwd) in enumerate(accounts, 1):
-        coro = loop.run_in_executor(executor, cookie_checkin_with_retry, idx, email, pwd)
+        coro = loop.run_in_executor(
+            executor, cookie_checkin_with_retry, idx, email, pwd
+        )
         task = asyncio.ensure_future(coro)
         checkin_tasks.append(task)
         task_to_idx[task] = idx
@@ -381,17 +455,30 @@ async def async_main():
             await browser.close()
 
         # 处理所有登录结果
-        for (idx, email, pwd), (ret_email, pw_cookies, err, domain) in zip(need_login, login_results):
+        for (idx, email, pwd), (ret_email, pw_cookies, err, domain) in zip(
+            need_login, login_results
+        ):
             masked = mask_email(email)
             base_url = f"https://{domain}" if domain else None
 
             if err or not pw_cookies:
                 print(f"  ❌ {masked} 登录失败: {err}")
-                results.append({"email": masked, "success": False, "message": f"登录失败: {err}", "domain": domain or "all"})
+                results.append(
+                    {
+                        "email": masked,
+                        "success": False,
+                        "message": f"登录失败: {err}",
+                        "domain": domain or "all",
+                    }
+                )
                 continue
 
             if base_url:
-                cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
+                cookie_dict = {
+                    c["name"]: c["value"]
+                    for c in pw_cookies
+                    if c.get("name") and c.get("value") is not None
+                }
                 sess = requests.session()
                 sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
                 ok_s, msg = do_checkin(sess, base_url)
@@ -402,7 +489,9 @@ async def async_main():
                         f.write("1")
                     print(f"  💾 {masked} Cookie 已保存 ({domain})")
 
-                results.append({"email": masked, "success": ok_s, "message": msg, "domain": domain})
+                results.append(
+                    {"email": masked, "success": ok_s, "message": msg, "domain": domain}
+                )
                 icon = "✅" if ok_s else "❌"
                 print(f"  {icon} {masked} {msg}")
 
@@ -421,9 +510,40 @@ async def async_main():
 
     try:
         with open(RESULT_FILE, "w", encoding="utf-8") as f:
-            json.dump({"results": results, "summary": "\n".join(summary_lines), "has_failure": has_failure}, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {
+                    "results": results,
+                    "summary": "\n".join(summary_lines),
+                    "has_failure": has_failure,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
     except Exception:
         pass
+
+    # ─────────────── 企业微信通知（移植）───────────────
+    wx_corpid = os.environ.get("WX_CORPID")
+    wx_corpsecret = os.environ.get("WX_CORPSECRET")
+    wx_agentid = os.environ.get("WX_AGENTID")
+
+    if wx_corpid and wx_corpsecret and wx_agentid:
+        total = len(results)
+        success_count = sum(1 for r in results if r["success"])
+        fail_count = total - success_count
+        header = f"iKuuu 签到报告\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n总计: {total} 账号 | ✅成功: {success_count} | ❌失败: {fail_count}\n\n详细结果:\n"
+        content = header + "\n".join(summary_lines)
+        if len(content) > 2000:
+            content = content[:2000] + "\n...(内容过长已截断)"
+        # 同步发送，不影响异步事件循环
+        await asyncio.to_thread(
+            send_wecom_message, content, wx_corpid, wx_corpsecret, wx_agentid
+        )
+    else:
+        print(
+            "ℹ️ 未配置企业微信环境变量 (WX_CORPID/WX_CORPSECRET/WX_AGENTID)，跳过通知"
+        )
 
 
 if __name__ == "__main__":
