@@ -524,9 +524,9 @@ async def async_main():
         pass
 
     # ─────────────── 企业微信通知（移植）───────────────
-    wx_corpid = os.environ.get("WX_CORPID")
-    wx_corpsecret = os.environ.get("WX_CORPSECRET")
-    wx_agentid = os.environ.get("WX_AGENTID")
+    wx_corpid = os.getenv("WX_CORPID")
+    wx_corpsecret = os.getenv("WX_CORPSECRET")
+    wx_agentid = os.getenv("WX_AGENTID")
 
     if wx_corpid and wx_corpsecret and wx_agentid:
         total = len(results)
