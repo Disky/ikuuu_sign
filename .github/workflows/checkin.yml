@@ -7,6 +7,9 @@ on:
 
 env:
   ACCOUNTS: ${{ secrets.ACCOUNTS }}
+  WX_CORPID: ${{ secrets.WX_CORPID }}
+  WX_CORPSECRET: ${{ secrets.WX_CORPSECRET }}
+  WX_AGENTID: ${{ secrets.WX_AGENTID }}
   ISSUE_NUMBER: 1
 
 jobs:
