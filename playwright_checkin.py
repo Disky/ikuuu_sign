@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 try:
@@ -536,7 +537,9 @@ async def async_main():
         total = len(results)
         success_count = sum(1 for r in results if r["success"])
         fail_count = total - success_count
-        header = f"iKuuu 签到报告\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n总计: {total} 账号 | ✅成功: {success_count} | ❌失败: {fail_count}\n\n详细结果:\n"
+        # header = f"iKuuu 签到报告\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n总计: {total} 账号 | ✅成功: {success_count} | ❌失败: {fail_count}\n\n详细结果:\n"
+        tz_utc_8 = timezone(timedelta(hours=8))
+        header = f"iKuuu 签到报告\n时间: {datetime.now(tz_utc_8).strftime('%Y-%m-%d %H:%M:%S')}\n总计: {total} 账号 | ✅成功: {success_count} | ❌失败: {fail_count}\n\n详细结果:\n"
         content = header + "\n".join(summary_lines)
         if len(content) > 2000:
             content = content[:2000] + "\n...(内容过长已截断)"
