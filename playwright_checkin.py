@@ -8,6 +8,7 @@ import sys
 import asyncio
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 try:
     from playwright.async_api import async_playwright, TimeoutError as PwTimeout
@@ -147,6 +148,52 @@ _cookie_lock = Lock()
 def tprint(*args, **kwargs):
     with _print_lock:
         print(*args, **kwargs)
+
+# ─────────────── 企业微信通知（同步实现，可在异步中直接调用）───────────────
+def get_wecom_access_token(corpid, corpsecret):
+    """获取企业微信 access_token"""
+    url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corpid}&corpsecret={corpsecret}"
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get("errcode") == 0:
+            return data["access_token"]
+        else:
+            print(f"⚠️ 获取 access_token 失败: {data}")
+            return None
+    except Exception as e:
+        print(f"⚠️ 获取 access_token 异常: {e}")
+        return None
+
+
+def send_wecom_message(content, corpid, corpsecret, agentid):
+    """发送企业微信文本消息（给所有人）"""
+    if not all([corpid, corpsecret, agentid]):
+        print("⚠️ 企业微信配置不完整，跳过发送")
+        return False
+    token = get_wecom_access_token(corpid, corpsecret)
+    if not token:
+        return False
+    url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}"
+    data = {
+        "touser": "@all",
+        "msgtype": "text",
+        "agentid": int(agentid),
+        "text": {"content": content[:2048]},  # 企业微信限制 2048 字节
+    }
+    try:
+        resp = requests.post(url, json=data, timeout=10)
+        result = resp.json()
+        if result.get("errcode") == 0:
+            print("✅ 企业微信通知发送成功")
+            return True
+        else:
+            print(f"⚠️ 企业微信通知发送失败: {result}")
+            return False
+    except Exception as e:
+        print(f"⚠️ 企业微信通知异常: {e}")
+        return False
+
 
 # ─────────────── Playwright 登录（context 级别，async）───────────────
 async def login_in_context_async(context, email, password, base_url, timeout_ms=60000):
@@ -409,6 +456,29 @@ async def async_main():
             json.dump({"results": results, "summary": "\n".join(summary_lines), "has_failure": has_failure}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+    # ─────────────── 企业微信通知（移植）───────────────
+    wx_corpid = os.getenv("WX_CORPID")
+    wx_corpsecret = os.getenv("WX_CORPSECRET")
+    wx_agentid = os.getenv("WX_AGENTID")
+
+    if wx_corpid and wx_corpsecret and wx_agentid:
+        total = len(results)
+        success_count = sum(1 for r in results if r["success"])
+        fail_count = total - success_count
+        tz_utc_8 = timezone(timedelta(hours=8))
+        header = f"iKuuu 签到报告\n时间: {datetime.now(tz_utc_8).strftime('%Y-%m-%d %H:%M:%S')}\n总计: {total} 账号 | ✅成功: {success_count} | ❌失败: {fail_count}\n\n详细结果:\n"
+        content = header + "\n".join(summary_lines)
+        if len(content) > 2000:
+            content = content[:2000] + "\n...(内容过长已截断)"
+        # 同步发送，不影响异步事件循环
+        await asyncio.to_thread(
+            send_wecom_message, content, wx_corpid, wx_corpsecret, wx_agentid
+        )
+    else:
+        print(
+            "ℹ️ 未配置企业微信环境变量 (WX_CORPID/WX_CORPSECRET/WX_AGENTID)，跳过通知"
+        )
 
 
 if __name__ == "__main__":
