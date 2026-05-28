@@ -2,11 +2,14 @@ name: iKuuu Checkin
 
 on:
   schedule:
-    - cron: "0 16 * * *"
+    - cron: "0 22 * * *"
   workflow_dispatch:
 
 env:
   ACCOUNTS: ${{ secrets.ACCOUNTS }}
+  WX_CORPID: ${{ secrets.WX_CORPID }}
+  WX_CORPSECRET: ${{ secrets.WX_CORPSECRET }}
+  WX_AGENTID: ${{ secrets.WX_AGENTID }}
   ISSUE_NUMBER: 1
 
 jobs:
